@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .sccl_basic import *
 from .collective import *
 from .topology import *
+from .candidate_generator import *
 
 class ParetoSynthesizer:
     """Implements the Pareto-optimal synthesis algorithm"""
@@ -23,38 +24,45 @@ class ParetoSynthesizer:
         """
         self.k = k
         self.max_steps_offset = max_steps_offset
+        self.candidate_generator = CandidateGenerator(k)
     
     def synthesize(self, collective_type: CollectiveType, 
                   topology: Topology) -> List[Dict]:
         """
         Main Pareto synthesis algorithm 
         """
-        print("=== Starting Pareto Synthesis ===")
-        # Line 2: Compute diameter
-        a_l = topology.compute_diameter()  # Latency lower bound
-        print(f"Diameter (a_l): {a_l}")
-        
-        # Line 3: Compute inverse bisection bandwidth
+        # Compute lower bounds
+        a_l = topology.compute_diameter()
         b_l = topology.compute_inv_bisection_bandwidth()
-        print(f"Inverse bisection bandwidth (b_l): {b_l:.4f}")
         
+        P = topology.num_nodes
         synthesized_algorithms = []
+        total_stats = {
+            'total_candidates': 0,
+            'total_smt_calls': 0,
+            'total_filtered': 0
+        }
+        
+        print(f"Synthesis parameters:")
+        print(f"  Collective: {collective_type.value}")
+        print(f"  Topology: {P} nodes, {len(topology.bandwidth)} links")
+        print(f"  k-synchronous: k={self.k}")
+        print(f"  Latency lower bound (diameter): {a_l}")
+        print(f"  Bandwidth lower bound (inv bisection): {b_l:.3f}")
         
         # Line 5: Iterate over steps starting from diameter
         for S in range(a_l, a_l + self.max_steps_offset):  # Limit search to prevent infinite loop
             print(f"\n--- Steps S = {S} ---")
+            # Generate filtered candidates
+            candidates, stats = self.candidate_generator.generate_candidates(
+                collective_type, topology, S, b_l
+            )
             
-            # Line 6: Generate candidate (R, C) pairs
-            candidates = []
+            total_stats['total_candidates'] += stats.total_possible
+            total_stats['total_filtered'] += (stats.total_possible - stats.final_count)
 
-            for R in range(S, S + self.k + 1):
-                for C in range(1, int(R / b_l) + 1):
-                    candidates.append((R, C))
-            
             # Line 7: Sort by ascending R/C (bandwidth cost)
             candidates.sort(key=lambda x: x[0] / x[1])
-            
-            print(f"Candidates: {len(candidates)} pairs")
             
             # Try each candidate
             for R, C in candidates:               
@@ -68,6 +76,7 @@ class ParetoSynthesizer:
                 print(f"Trying S={S}, R={R}, C={C} (R/C={R/C:.3f})...", end='')
                 sccl = SCCLBasic(topology, collective, S, R)
                 solution = sccl.solve()
+                total_stats['total_smt_calls'] += 1
                 
                 if solution and solution['status'] == 'sat':
                     # Line 10: Report synthesized algorithm
@@ -97,6 +106,16 @@ class ParetoSynthesizer:
                 break
         
         return synthesized_algorithms
+    
+    def _print_summary(self, stats):
+        """Print summary statistics"""
+        print(f"\nSynthesis Summary:")
+        print(f"  Total candidate space explored: {stats['total_candidates']}")
+        print(f"  Candidates filtered out: {stats['total_filtered']} "
+              f"({stats['total_filtered']/stats['total_candidates']*100:.1f}%)")
+        print(f"  SMT solver calls: {stats['total_smt_calls']}")
+        print(f"  Filtering efficiency: {stats['total_filtered']/stats['total_candidates']*100:.1f}% "
+              f"reduction in SMT calls")
     
 def visualize_pareto_frontier(algorithms: List[Dict]):
     """Visualize the Pareto frontier"""
