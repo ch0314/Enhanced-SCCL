@@ -6,6 +6,8 @@ from .sccl_basic import *
 from .collective import *
 from .topology import *
 from .candidate_generator import *
+from .visualization import *
+from .algorithm_verifier import *
 
 class ParetoSynthesizer:
     """Implements the Pareto-optimal synthesis algorithm"""
@@ -13,6 +15,7 @@ class ParetoSynthesizer:
     def __init__(self, 
                  k: int = 5,                    # k-synchronous parameter
                  max_steps_offset: int = 10,    # Max steps to search beyond diameter
+                 max_algorithms: int = 10
                  ):
         """
         Initialize synthesizer with search parameters
@@ -24,6 +27,7 @@ class ParetoSynthesizer:
         """
         self.k = k
         self.max_steps_offset = max_steps_offset
+        self.max_algorithms = max(k, max_algorithms)
         self.candidate_generator = CandidateGenerator(k)
     
     def synthesize(self, collective_type: CollectiveType, 
@@ -101,7 +105,7 @@ class ParetoSynthesizer:
                     break
             
             # Optional: Stop if we've found enough algorithms
-            if len(synthesized_algorithms) > 5:
+            if len(synthesized_algorithms) > self.max_algorithms:
                 print("\nFound sufficient algorithms, stopping search")
                 break
         
@@ -117,95 +121,31 @@ class ParetoSynthesizer:
         print(f"  Filtering efficiency: {stats['total_filtered']/stats['total_candidates']*100:.1f}% "
               f"reduction in SMT calls")
     
-def visualize_pareto_frontier(algorithms: List[Dict]):
-    """Visualize the Pareto frontier"""
-    import matplotlib.pyplot as plt
-    
-    if not algorithms:
-        print("No algorithms to visualize")
-        return
-    
-    # Extract costs
-    latencies = [alg['latency_cost'] for alg in algorithms]
-    bandwidths = [alg['bandwidth_cost'] for alg in algorithms]
-    
-    plt.figure(figsize=(10, 6))
-    
-    # Plot all algorithms
-    plt.scatter(latencies, bandwidths, s=100, alpha=0.7, c='blue', 
-                edgecolors='black', linewidth=2)
-    
-    # Annotate points
-    for i, alg in enumerate(algorithms):
-        plt.annotate(f"({alg['steps']},{alg['rounds']},{alg['chunks_per_node']})",
-                    (alg['latency_cost'], alg['bandwidth_cost']),
-                    xytext=(5, 5), textcoords='offset points', fontsize=8)
-    
-    # Connect Pareto points
-    sorted_algs = sorted(algorithms, key=lambda x: x['latency_cost'])
-    pareto_lat = [alg['latency_cost'] for alg in sorted_algs]
-    pareto_bw = [alg['bandwidth_cost'] for alg in sorted_algs]
-    plt.plot(pareto_lat, pareto_bw, 'r--', alpha=0.5, linewidth=2)
-    
-    plt.xlabel('Latency Cost (Steps)', fontsize=12)
-    plt.ylabel('Bandwidth Cost (R/C)', fontsize=12)
-    plt.title('Pareto Frontier for Collective Algorithms', fontsize=14)
-    plt.grid(True, alpha=0.3)
-    
-    # Add legend explaining annotation format
-    plt.text(0.02, 0.98, 'Format: (steps, rounds, chunks/node)', 
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    plt.tight_layout()
-    plt.show()
-
 # Example usage
 if __name__ == "__main__":
-    # Test on 4-node ring
-    print("=== Testing Pareto Synthesis on 4-node Ring ===")
-
-    # Create synthesizer with k=3
-    synthesizer = ParetoSynthesizer(k=3)
-    
-    # Run Pareto synthesis
-    algorithms = synthesizer.synthesize(
-        collective_type=CollectiveType.ALLGATHER,
-        topology=create_ring_topology(4)
+    # Ring topology
+    ring_topology = Topology(
+        num_nodes=8,
+        bandwidth={(i, (i+1)%8): 1 for i in range(8)} | 
+                  {((i+1)%8, i): 1 for i in range(8)}
     )
     
-    print(f"\n=== Found {len(algorithms)} algorithms ===")
-    for alg in sorted(algorithms, key=lambda x: x['latency_cost']):
-        print(f"Steps={alg['steps']}, Rounds={alg['rounds']}, "
-              f"Chunks/node={alg['chunks_per_node']}, "
-              f"Latency={alg['latency_cost']}, "
-              f"Bandwidth={alg['bandwidth_cost']:.3f}")
+    synthesizer = ParetoSynthesizer(k=10)
     
-    # Visualize
-    if algorithms:
+    # Test with different collectives to see filtering effects
+    for coll_type in [CollectiveType.ALLTOALL]:
+        print(f"\n{'='*60}")
+        print(f"Testing {coll_type.value.upper()}")
+        print(f"{'='*60}")
+        
+        algorithms = synthesizer.synthesize(
+            coll_type, ring_topology
+        )
+
+        verification_results = verify_synthesized_algorithms(
+            algorithms, ring_topology, coll_type
+        )
+
+        print_verification_summary(algorithms, verification_results)
+
         visualize_pareto_frontier(algorithms)
-    
-    # Test on heterogeneous topology
-    print("\n\n=== Testing on Heterogeneous Topology ===")
-    
-    # Create a heterogeneous topology (2 fast groups connected by slow link)
-    hetero_bandwidth = {
-        # Fast intra-group links
-        (0, 1): 2, (1, 0): 2,  # Group 1
-        (2, 3): 2, (3, 2): 2,  # Group 2
-        # Slow inter-group links
-        (1, 2): 1, (2, 1): 1
-    }
-    hetero_topology = Topology(num_nodes=4, bandwidth=hetero_bandwidth)
-    
-    # Run synthesis
-    hetero_algorithms = synthesizer.synthesize(
-        collective_type=CollectiveType.ALLGATHER,
-        topology=hetero_topology
-    )    
-    print(f"\n=== Found {len(hetero_algorithms)} Pareto-optimal algorithms for heterogeneous topology ===")
-    for alg in sorted(hetero_algorithms, key=lambda x: x['latency_cost']):
-        print(f"Steps={alg['steps']}, Rounds={alg['rounds']}, "
-              f"Chunks/node={alg['chunks_per_node']}, "
-              f"Latency={alg['latency_cost']}, "
-              f"Bandwidth={alg['bandwidth_cost']:.3f}")
