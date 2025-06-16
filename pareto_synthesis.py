@@ -1,7 +1,6 @@
 # pareto_synthesis.py
 from z3 import *
 from typing import List, Tuple, Set, Dict, Optional
-from dataclasses import dataclass
 from .sccl_basic import *
 from .collective import *
 from .topology import *
@@ -61,6 +60,8 @@ class ParetoSynthesizer:
             candidates, stats = self.candidate_generator.generate_candidates(
                 collective_type, topology, S, b_l
             )
+
+            # candidates, stats = self.candidate_generator.generate_candidates_simple(S, b_l)
             
             total_stats['total_candidates'] += stats.total_possible
             total_stats['total_filtered'] += (stats.total_possible - stats.final_count)

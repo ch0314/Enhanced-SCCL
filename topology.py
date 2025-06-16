@@ -85,3 +85,56 @@ def create_ring_topology(num_nodes: int) -> Topology:
         bandwidth[((i + 1) % num_nodes, i)] = 1
     
     return Topology(num_nodes=num_nodes, bandwidth=bandwidth)
+
+
+def create_dgx1_topology() -> Topology:
+    """
+    Create DGX-1 topology as described in the SCCL paper.
+    
+    DGX-1 has 8 GPUs arranged in two groups:
+    - Group 1: GPUs 0,1,2,3 (fully connected)
+    - Group 2: GPUs 4,5,6,7 (fully connected)
+    - Inter-group links: 0-4, 1-5, 2-6, 3-7
+    
+    Forms two non-overlapping rings:
+    - Ring 1: 0-1-4-5-6-7-2-3 (2 NVLinks per edge)
+    - Ring 2: 0-2-1-3-6-4-7-5 (1 NVLink per edge)
+    """
+    bandwidth = {}
+    
+    # Intra-group connections (within each group of 4)
+    # Group 1: 0,1,2,3
+    for i in range(4):
+        for j in range(4):
+            if i != j:
+                # Check if this edge belongs to ring 1 (2 NVLinks)
+                if (i, j) in [(0,1), (1,0), (2,3), (3,2)]:
+                    bandwidth[(i, j)] = 2
+                else:
+                    bandwidth[(i, j)] = 1
+    
+    # Group 2: 4,5,6,7
+    for i in range(4, 8):
+        for j in range(4, 8):
+            if i != j:
+                # Check if this edge belongs to ring 1 (2 NVLinks)
+                if (i, j) in [(4,5), (5,6), (6,7), (7,4)]:
+                    bandwidth[(i, j)] = 2
+                else:
+                    bandwidth[(i, j)] = 1
+    
+    # Inter-group connections
+    inter_group_links = [
+        (0, 4), (4, 0),  # These are part of ring 1 (2 NVLinks)
+        (1, 5), (5, 1),  # These are part of ring 1 (2 NVLinks)
+        (2, 6), (6, 2),  # These are part of ring 2 (1 NVLink)
+        (3, 7), (7, 3)   # These are part of ring 2 (1 NVLink)
+    ]
+    
+    for src, dst in inter_group_links:
+        if (src, dst) in [(0,4), (1,5)]:
+            bandwidth[(src, dst)] = 2
+        else:
+            bandwidth[(src, dst)] = 1
+    
+    return Topology(num_nodes=8, bandwidth=bandwidth)

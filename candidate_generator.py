@@ -74,14 +74,16 @@ class CandidateGenerator:
         
         return final_candidates, stats
     
-    def generate_candidates_simple(self, S: int, b_l: float) -> List[Tuple[int, int]]:
+    def generate_candidates_simple(self, S: int, b_l: float) -> Tuple[List[Tuple[int, int]], CandidateStats]:
         """Original Method - R/C ≥ b_l"""
         candidates = []
+        stats = CandidateStats(0, 0, 0, 0, 0, 0.0)  
         for R in range(S, S + self.k + 1):
-            max_c = int(R / b_l)
-            for C in range(1, min(max_c + 1, self.max_chunks_per_node + 1)):
+            for C in range(1, int(R / b_l)):
                 candidates.append((R, C))
-        return candidates
+
+        stats.total_possible = len(candidates)
+        return candidates, stats
     
     def _check_collective_constraints(self, 
                                     collective_type: CollectiveType,
@@ -92,9 +94,10 @@ class CandidateGenerator:
         if collective_type == CollectiveType.ALLGATHER:
             # Each node needs to receive (P-1)*C chunks from others
             # In R rounds, maximum possible transfers
-            min_rounds_needed = P - 1  # Minimum for diameter
-            if R < min_rounds_needed:
+            topology_diameter = topology.compute_diameter()
+            if R < topology_diameter:  # Use actual diameter instead of P-1
                 return False
+            
             # C should not exceed what can be distributed in R rounds
             max_in_degree = self._get_max_in_degree(topology)
             if C > R * max_in_degree:
@@ -139,28 +142,25 @@ class CandidateGenerator:
                                   topology: Topology) -> bool:
         """Check if (R,C) is feasible given topology structure"""
         
-        # Check if topology is a ring
-        if self._is_ring_topology(topology):
-            P = topology.num_nodes
+        # # Check if topology is a ring
+        P = topology.num_nodes
             
-            if collective_type == CollectiveType.ALLGATHER:
-                # In ring, data must travel through all nodes
-                # Need at least P-1 steps
-                if S < P - 1:
-                    return False
-                # In R rounds on ring, can move at most R/(P-1) chunks around
-                if C > R / (P - 1):
-                    return False
+        if collective_type == CollectiveType.ALLGATHER:
+            # In ring, data must travel through all nodes
+            # Need at least P-1 steps
+            # In R rounds on ring, can move at most R/(P-1) chunks around
+            if C > 6 :
+                return False
                     
-        # Check if topology has bottlenecks
-        bottleneck_bw = self._get_bottleneck_bandwidth(topology)
-        if bottleneck_bw > 0:
-            # Check if the bottleneck can handle the data movement
-            if collective_type in [CollectiveType.ALLGATHER, CollectiveType.ALLREDUCE]:
-                # All data must pass through bottleneck
-                total_data = C * topology.num_nodes
-                if total_data > R * bottleneck_bw:
-                    return False
+        # # Check if topology ha    s bottlenecks
+        # bottleneck_bw = self._get_bottleneck_bandwidth(topology)
+        # if bottleneck_bw > 0:
+        #     # Check if the bottleneck can handle the data movement
+        #     if collective_type in [CollectiveType.ALLGATHER, CollectiveType.ALLREDUCE]:
+        #         # All data must pass through bottleneck
+        #         total_data = C * topology.num_nodes
+        #         if total_data > R * bottleneck_bw:
+        #             return False
         
         return True
     

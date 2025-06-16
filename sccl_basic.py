@@ -129,7 +129,6 @@ class SCCLBasic:
         result = self.solver.check()
         
         if result == sat:
-            print(" Problem is unsatisfiable!")
             model = self.solver.model()
             
             # Extract solution
