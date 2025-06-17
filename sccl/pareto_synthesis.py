@@ -2,11 +2,11 @@
 from z3 import *
 from typing import List, Tuple, Set, Dict, Optional
 from .sccl_basic import *
-from .collective import *
-from .topology import *
+from ..collective import *
+from ..topology import *
 from .candidate_generator import *
-from .visualization import *
-from .algorithm_verifier import *
+from ..util.visualization import *
+from ..util.algorithm_verifier import *
 
 class ParetoSynthesizer:
     """Implements the Pareto-optimal synthesis algorithm"""

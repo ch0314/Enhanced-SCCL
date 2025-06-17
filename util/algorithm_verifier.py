@@ -1,8 +1,8 @@
 # algorithm_verifier.py
 from typing import Dict, List, Set, Tuple, Optional
 from dataclasses import dataclass
-from .topology import Topology
-from .collective import Collective, CollectiveType
+from ..topology import Topology
+from ..collective import Collective, CollectiveType
 
 @dataclass
 class VerificationResult:

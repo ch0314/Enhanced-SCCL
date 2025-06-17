@@ -5,7 +5,7 @@ from collections import defaultdict
 import heapq
 import random
 from .path_based_synthesizer import *
-from .topology import create_dgx1_topology
+from ..topology import create_dgx1_topology
 
 class LookaheadMergingStrategy:
     """미래의 병합 기회를 고려한 병합 전략"""

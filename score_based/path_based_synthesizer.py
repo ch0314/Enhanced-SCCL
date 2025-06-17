@@ -4,7 +4,7 @@ from typing import List, Dict, Tuple, Set, Optional
 from dataclasses import dataclass
 from collections import defaultdict
 import matplotlib.pyplot as plt
-from .topology import *
+from ..topology import *
 
 
 @dataclass

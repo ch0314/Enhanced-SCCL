@@ -4,8 +4,8 @@ sys.path.append('.')
 
 from .topology import Topology
 from .collective import CollectiveType
-from .pareto_synthesis import ParetoSynthesizer
-from .visualization import visualize_pareto_frontier
+from .sccl.pareto_synthesis import ParetoSynthesizer
+from .util.visualization import visualize_pareto_frontier
 
 def create_dgx1_topology() -> Topology:
     """

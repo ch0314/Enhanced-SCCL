@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, List, Set, Optional
 from enum import Enum
 import math
-from .topology import *
-from .collective import *
+from ..topology import *
+from ..collective import *
 
 @dataclass
 class CandidateStats:

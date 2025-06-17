@@ -3,8 +3,8 @@ from z3 import *
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple, Set, Dict, Optional
-from .topology import *
-from .collective import *
+from ..topology import *
+from ..collective import *
 
 class SCCLBasic:
     """Basic SCCL implementation"""
