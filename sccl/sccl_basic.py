@@ -1,13 +1,13 @@
-# sccl_basic_fixed_v2.py
+# sccl_with_constraint_sets.py
 from z3 import *
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple, Set, Dict, Optional
+from typing import List, Tuple, Set, Dict, Optional, FrozenSet
 from ..topology import *
 from ..collective import *
 
 class SCCLBasic:
-    """Basic SCCL implementation"""
+    """SCCL implementation with proper bandwidth constraint sets"""
     
     def __init__(self, topology: Topology, collective: Collective, 
                  num_steps: int, num_rounds: int):
@@ -42,13 +42,13 @@ class SCCLBasic:
             self.round_vars.append(Int(f'r_{s}'))
     
     def _add_constraints(self):
-        """Add SMT constraints"""
+        """Add SMT constraints with proper bandwidth constraint sets"""
         
-        # C1: Precondition - nodes that initially have chunks
+        # C1: Precondition
         for (c, n) in self.collective.precondition:
             self.solver.add(self.time_vars[(c, n)] == 0)
         
-        # C2: Postcondition - nodes that must have chunks at the end
+        # C2: Postcondition
         for (c, n) in self.collective.postcondition:
             self.solver.add(self.time_vars[(c, n)] <= self.num_steps)
         
@@ -56,7 +56,6 @@ class SCCLBasic:
         for c in range(self.collective.num_chunks):
             for n in range(self.topology.num_nodes):
                 if (c, n) not in self.collective.precondition:
-                    # Sum of all possible incoming sends equals 1
                     incoming_sends = []
                     for (src, dst) in self.topology.get_links():
                         if dst == n:
@@ -82,22 +81,8 @@ class SCCLBasic:
                     )
                 )
         
-        # C5: Bandwidth constraint - limit sends per link at each step
-        for s in range(1, self.num_steps + 1):
-            for (src, dst) in self.topology.get_links():
-                sends_at_step = []
-                for c in range(self.collective.num_chunks):
-                    sends_at_step.append(
-                        If(And(
-                            self.send_vars[(src, c, dst)],
-                            self.time_vars[(c, dst)] == s
-                        ), 1, 0)
-                    )
-                
-                bandwidth = self.topology.bandwidth[(src, dst)]
-                self.solver.add(
-                    Sum(sends_at_step) <= bandwidth * self.round_vars[s-1]
-                )
+        # C5: Bandwidth constraints with constraint sets
+        self._add_bandwidth_constraints()
         
         # C6: Total rounds constraint
         self.solver.add(Sum(self.round_vars) == self.num_rounds)
@@ -106,23 +91,38 @@ class SCCLBasic:
         for r in self.round_vars:
             self.solver.add(r >= 0)
     
-    def _get_value(self, model, var):
-        """Safely extract value from Z3 model"""
-        val = model.evaluate(var, model_completion=True)
-        if is_int_value(val):
-            return val.as_long()
-        elif is_bool(val):
-            return is_true(val)
-        else:
-            # Try to simplify
-            val = simplify(val)
-            if is_int_value(val):
-                return val.as_long()
-            elif is_bool(val):
-                return is_true(val)
-            else:
-                print(f"Warning: Could not extract value for {var}, got {val} of type {type(val)}")
-                return None
+    def _add_bandwidth_constraints(self):
+        """
+        Add bandwidth constraints following SCCL paper's constraint sets.
+        
+        For each step s and bandwidth constraint (L, b) ∈ B:
+        |{(c, n, n', s) ∈ T | (n, n') ∈ L}| ≤ b · r_s
+        """
+        # Get all bandwidth constraints
+        constraints = self.topology.get_bandwidth_constraints_for_step()
+        
+        # For each step
+        for s in range(1, self.num_steps + 1):
+            # For each bandwidth constraint set
+            for link_set, bandwidth in constraints:
+                # Count sends in this link set at this step
+                sends_in_set = []
+                
+                for (src, dst) in link_set:
+                    for c in range(self.collective.num_chunks):
+                        # Add to count if this send happens at step s
+                        sends_in_set.append(
+                            If(And(
+                                self.send_vars[(src, c, dst)],
+                                self.time_vars[(c, dst)] == s
+                            ), 1, 0)
+                        )
+                
+                # Add constraint: total sends in this set ≤ bandwidth * rounds
+                if sends_in_set:
+                    self.solver.add(
+                        Sum(sends_in_set) <= bandwidth * self.round_vars[s-1]
+                    )
     
     def solve(self) -> Optional[Dict]:
         """Solve SMT problem"""
@@ -133,48 +133,35 @@ class SCCLBasic:
             
             # Extract solution
             solution = {
+                'status': 'sat',
                 'rounds': [],
-                'sends': [],
-                'schedule': {},
-                'status': 'sat'
+                'sends': []
             }
             
-            # Round information
-            for i, r in enumerate(self.round_vars):
-                val = self._get_value(model, r)
-                if val is not None:
-                    solution['rounds'].append(val)
-                else:
-                    print(f"Warning: Could not get value for round {i}")
-                    solution['rounds'].append(0)
+            # Extract rounds per step
+            for s in range(self.num_steps):
+                r_val = model.evaluate(self.round_vars[s], model_completion=True)
+                solution['rounds'].append(r_val.as_long() if is_int_value(r_val) else 0)
             
-            # Send information
-            for (src, c, dst), var in self.send_vars.items():
-                is_sent = self._get_value(model, var)
-                if is_sent:
-                    time_val = self._get_value(model, self.time_vars[(c, dst)])
-                    if time_val is not None:
+            # Extract sends
+            for (src, dst) in self.topology.get_links():
+                for c in range(self.collective.num_chunks):
+                    send_var = self.send_vars[(src, c, dst)]
+                    if is_true(model.evaluate(send_var, model_completion=True)):
+                        time_val = model.evaluate(self.time_vars[(c, dst)], model_completion=True)
+                        step = time_val.as_long() - 1 if is_int_value(time_val) else 0
+                        
                         solution['sends'].append({
-                            'chunk': c,
                             'src': src,
                             'dst': dst,
-                            'step': time_val - 1
+                            'chunk': c,
+                            'step': step
                         })
-            
-            # Schedule information
-            for (c, n), var in self.time_vars.items():
-                val = self._get_value(model, var)
-                if val is not None:
-                    solution['schedule'][(c, n)] = val
             
             return solution
         else:
-            print(f"Solver result: {result}")
-            if result == unsat:
-                print(" Problem is unsatisfiable!")
-                # Try to get unsat core
-                self.solver.set(unsat_core=True)
             return None
+
 
 def print_solution_details(solution: Dict):
     """Print detailed solution information"""
@@ -200,95 +187,77 @@ def print_solution_details(solution: Dict):
         for send in sorted(sends_by_step[step], key=lambda x: (x['src'], x['dst'])):
             print(f"  Node {send['src']} -> Node {send['dst']}: chunk {send['chunk']}")
 
-# Test with simple example first
-def test_simple_case():
-    """Test with a simple 2-node case first"""
-    print("=== Testing Simple 2-node Case ===")
+# Test functions
+def test_bidirectional_ring():
+    """Test bidirectional ring with proper constraints"""
+    print("=== Testing Bidirectional Ring with Constraint Sets ===")
     
-    # Create 2-node topology
-    bandwidth = {(0, 1): 1, (1, 0): 1}
-    topology = Topology(num_nodes=2, bandwidth=bandwidth)
+    # Create ring with bidirectional constraints
+    ring = create_ring_topology(4)
     
-    # Create simple collective - node 0 has chunk 0, both need it
+    # Create AllGather collective
     collective = Collective.create_collective(
-        name = CollectiveType.BROADCAST,
-        num_nodes=2,
+        CollectiveType.ALLGATHER,
+        num_nodes=4,
         chunks_per_node=1
     )
     
-    # This should be solvable in 1 step, 1 round
-    sccl = SCCLBasic(topology, collective, num_rounds=1, num_steps=1)
-    solution = sccl.solve()
+    print(f"Topology constraints: {len(ring.bandwidth_constraints)}")
+    for i, bc in enumerate(ring.bandwidth_constraints):
+        print(f"  Constraint {i}: {len(bc.link_set)} links, bandwidth={bc.bandwidth}")
     
-    if solution:
-        print("Simple test PASSED!")
-        print_solution_details(solution)
-    else:
-        print("Simple test FAILED!")
-    
-    return solution is not None
-
-# Main test
-if __name__ == "__main__":
-    # Start with simple test
-    if not test_simple_case():
-        print("Simple test failed, debugging needed")
-        exit(1)
-    
-    print("\n" + "="*50 + "\n")
-    
-    # Now test full 4-node ring
-    print("=== Testing 4-node Ring All-Gather ===")
-    topology = create_ring_topology(4)
-    collective = Collective.create_collective(
-        collective_type = CollectiveType.ALLGATHER, 
-        num_nodes=4, 
-        chunks_per_node=2)
-    
-    print(f"Topology: 4-node ring")
-    print(f"Collective: {collective.name}")
-    print(f"Total chunks: {collective.num_chunks}")
-    print(f"Links: {topology.get_links()}")
-    
-    # Try with different configurations
-    found_solution = False
-    
-    test_configs = [
-        (3, 3),  # Known to work for ring allgather
-        (3, 4),
-        (4, 4),
-        (4, 5),
-        (4, 6),
-    ]
+    # Try different configurations
+    test_configs = [(2, 3), (3, 3), (4, 4)]
     
     for steps, rounds in test_configs:
-        print(f"\n--- Trying: {steps} steps, {rounds} rounds ---")
-        
-        sccl = SCCLBasic(topology, collective, steps, rounds)
+        print(f"\nTrying S={steps}, R={rounds}...\n")
+        sccl = SCCLBasic(ring, collective, steps, rounds)
         solution = sccl.solve()
         
         if solution:
-            found_solution = True
-            print("Solution found!")
+            print(f"  ✓ Found solution!")
+            print(f"    Rounds: {solution['rounds']}")
+            print(f"    Total sends: {len(solution['sends'])}")
             print_solution_details(solution)
-            
-            # Verify solution correctness
-            print("\nVerifying solution...")
-            all_good = True
-            
-            # Check all postconditions are satisfied
-            for (c, n) in collective.postcondition:
-                if (c, n) not in solution['schedule']:
-                    print(f"  ERROR: Chunk {c} schedule missing for node {n}")
-                    all_good = False
-                elif solution['schedule'][(c, n)] > steps:
-                    print(f"  ERROR: Chunk {c} arrives at node {n} too late")
-                    all_good = False
-            
-            if all_good:
-                print("  ✓ Solution verified!")
-            
-            break  # Found one solution, that's enough for now
-    
-    if not found_solution:
-        print("\nNo solution found! This might indicate a bug in constraints.")
+        else:
+            print(f"  ✗ No solution")
+
+def test_dg1_topology():
+    """Test dgx1 topology with proper constraints"""
+    print("=== Testing dgx1 Topology with Constraint Sets ===")
+
+    # Create dgx1 topology
+    dgx1 = create_dgx1_topology()
+
+    # Try different configurations
+    test_configs = [(1, 2, 2), (2, 3, 3), (3, 4, 4), (4, 5, 5)]
+
+
+    print(f"Topology constraints: {len(dgx1.bandwidth_constraints)}")
+    for i, bc in enumerate(dgx1.bandwidth_constraints):
+        print(f"  Constraint {i}: {len(bc.link_set)} links, bandwidth={bc.bandwidth}")
+
+
+    for chunks, steps, rounds in test_configs:
+        # Create AllGather collective
+        collective = Collective.create_collective(
+            CollectiveType.ALLGATHER,
+            num_nodes=dgx1.num_nodes,
+            chunks_per_node=chunks
+        )       
+
+        print(f"\nTrying C={chunks}, S={steps}, R={rounds}...\n")
+        sccl = SCCLBasic(dgx1, collective, steps, rounds)
+        solution = sccl.solve()
+
+        if solution:
+            print(f"  ✓ Found solution!")
+            print(f"    Rounds: {solution['rounds']}")
+            print(f"    Total sends: {len(solution['sends'])}")
+            print_solution_details(solution)
+        else:
+            print(f"  ✗ No solution")
+
+# Example usage
+if __name__ == "__main__":
+    test_dg1_topology()

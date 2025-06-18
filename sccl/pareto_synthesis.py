@@ -37,9 +37,14 @@ class ParetoSynthesizer:
         # Compute lower bounds
         a_l = topology.compute_diameter()
         b_l = topology.compute_inv_bisection_bandwidth()
+
+        if(collective_type in [CollectiveType.ALLGATHER, CollectiveType.REDUCESCATTER]):
+            # For ALLTOALL, we need to ensure each node can send/receive all chunks
+            b_l *= topology.num_nodes - 1
         
         P = topology.num_nodes
         synthesized_algorithms = []
+        self.candidate_generator.reset_pareto_tracking()
         total_stats = {
             'total_candidates': 0,
             'total_smt_calls': 0,
@@ -68,6 +73,7 @@ class ParetoSynthesizer:
 
             # Line 7: Sort by ascending R/C (bandwidth cost)
             candidates.sort(key=lambda x: x[0] / x[1])
+            found_solution_this_step = False
             
             # Try each candidate
             for R, C in candidates:               
@@ -78,26 +84,32 @@ class ParetoSynthesizer:
                 G = collective.num_chunks
 
                 # Line 9: Try to synthesize
-                print(f"Trying S={S}, R={R}, C={C} (R/C={R/C:.3f})...", end='')
+                print(f"Trying S={S}, R={R}, C={C} (R/C={R/C:.3f})...\n", end='')
                 sccl = SCCLBasic(topology, collective, S, R)
                 solution = sccl.solve()
                 total_stats['total_smt_calls'] += 1
                 
                 if solution and solution['status'] == 'sat':
                     # Line 10: Report synthesized algorithm
+                    bandwidth_cost = R / C
                     algorithm = {
                         'steps': S,
                         'rounds': R,
                         'chunks_per_node': C,
                         'global_chunks': G,
                         'latency_cost': S,
-                        'bandwidth_cost': R / C,
+                        'bandwidth_cost': bandwidth_cost,
                         'solution': solution
                     }
                     
                     synthesized_algorithms.append(algorithm)
-                    print(f"\n    ✓ Synthesized algorithm: S={S}, R={R}, C={C}, cost=({S}, {R/C:.2f})")
-                    
+                    found_solution_this_step = True
+                    print(f" SUCCESS!")
+                    print(f"    ✓ Synthesized algorithm: S={S}, R={R}, C={C}, cost=({S}, {bandwidth_cost:.2f})")
+                    print_solution_details(solution)
+                    # Update Pareto tracking with new solution
+                    self.candidate_generator.update_best_bandwidth_cost(S, bandwidth_cost)
+
                     # Line 11-12: Check if we reached bandwidth lower bound
                     if abs(R/C - b_l) < 1e-6:
                         return synthesized_algorithms
@@ -125,16 +137,17 @@ class ParetoSynthesizer:
 # Example usage
 if __name__ == "__main__":
     # Ring topology
+    num_nodes=4
     ring_topology = Topology(
-        num_nodes=8,
-        bandwidth={(i, (i+1)%8): 1 for i in range(8)} | 
-                  {((i+1)%8, i): 1 for i in range(8)}
+        num_nodes=num_nodes,
+        bandwidth={(i, (i+1)%num_nodes): 1 for i in range(num_nodes)} | 
+                  {((i+1)%num_nodes, i): 1 for i in range(num_nodes)}
     )
     
     synthesizer = ParetoSynthesizer(k=10)
     
     # Test with different collectives to see filtering effects
-    for coll_type in [CollectiveType.ALLTOALL]:
+    for coll_type in [CollectiveType.ALLGATHER, CollectiveType.ALLTOALL]:
         print(f"\n{'='*60}")
         print(f"Testing {coll_type.value.upper()}")
         print(f"{'='*60}")
