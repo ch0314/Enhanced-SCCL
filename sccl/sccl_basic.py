@@ -10,11 +10,12 @@ class SCCLBasic:
     """SCCL implementation with proper bandwidth constraint sets"""
     
     def __init__(self, topology: Topology, collective: Collective, 
-                 num_steps: int, num_rounds: int):
+                 num_steps: int, num_rounds: int, paths: List[Dict] = None):
         self.topology = topology
         self.collective = collective
         self.num_steps = num_steps
         self.num_rounds = num_rounds
+        self.paths = paths 
         self.solver = Solver()
         
         # SMT variables

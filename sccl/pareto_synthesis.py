@@ -7,6 +7,8 @@ from ..topology import *
 from .candidate_generator import *
 from ..util.visualization import *
 from ..util.algorithm_verifier import *
+from .path_generator import *
+from .taccl_routing import *
 
 class ParetoSynthesizer:
     """Implements the Pareto-optimal synthesis algorithm"""
@@ -34,6 +36,7 @@ class ParetoSynthesizer:
         """
         Main Pareto synthesis algorithm 
         """        
+
         # Compute lower bounds
         a_l = topology.compute_diameter()
         b_l = topology.compute_inv_bisection_bandwidth()
@@ -81,12 +84,19 @@ class ParetoSynthesizer:
                 collective = Collective.create_collective(
                     collective_type, topology.num_nodes, C
                 )
+                # paths = generate_optimized_ring_paths(topology, collective)
+                print("Step 1: Generating paths with TACCL routing...")
+                taccl_routing = TACCLRouter(topology, collective, S, R)
+                paths = taccl_routing.generate_paths()
+                print(f"Found {len(paths)} paths")
+
+
                 verifier = AlgorithmVerifier(topology, collective)
                 G = collective.num_chunks
 
                 # Line 9: Try to synthesize
                 print(f"Trying S={S}, R={R}, C={C} (R/C={R/C:.3f})...\n", end='')
-                sccl = SCCLBasic(topology, collective, S, R)
+                sccl = SCCLBasic(topology, collective, S, R, paths)
                 solution = sccl.solve()
                 total_stats['total_smt_calls'] += 1
                 
