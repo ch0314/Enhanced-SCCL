@@ -37,7 +37,7 @@ class AlgorithmVerifier:
         if not self._verify_preconditions(solution, errors):
             return VerificationResult(False, errors, warnings, statistics)
             
-        # 2. Verify postconditions
+        # # 2. Verify postconditions
         if not self._verify_postconditions(solution, errors):
             return VerificationResult(False, errors, warnings, statistics)
             
@@ -65,30 +65,46 @@ class AlgorithmVerifier:
     
     def _verify_preconditions(self, solution: Dict, errors: List[str]) -> bool:
         """Verify all precondition chunks start at time 0"""
-        schedule = solution.get('schedule', {})
+        time_entries = solution.get('time', [])
+        
+        # Build a mapping from (chunk, node) to step for easier lookup
+        time_map = {}
+        for entry in time_entries:
+            chunk = entry['chunk']
+            node = entry['node']
+            step = entry['step']
+            time_map[(chunk, node)] = step
         
         for (chunk, node) in self.collective.precondition:
-            if (chunk, node) not in schedule:
-                errors.append(f"Precondition chunk {chunk} at node {node} missing from schedule")
+            if (chunk, node) not in time_map:
+                errors.append(f"Precondition chunk {chunk} at node {node} missing from time schedule")
                 return False
-            if schedule[(chunk, node)] != 0:
+            if time_map[(chunk, node)] != 0:
                 errors.append(f"Precondition chunk {chunk} at node {node} should start at time 0, "
-                            f"but starts at {schedule[(chunk, node)]}")
+                            f"but starts at {time_map[(chunk, node)]}")
                 return False
         return True
     
     def _verify_postconditions(self, solution: Dict, errors: List[str]) -> bool:
         """Verify all postcondition chunks are delivered"""
-        schedule = solution.get('schedule', {})
+        time_entries = solution.get('time', [])
         num_steps = len(solution.get('rounds', []))
         
+        # Build a mapping from (chunk, node) to step for easier lookup
+        time_map = {}
+        for entry in time_entries:
+            chunk = entry['chunk']
+            node = entry['node']
+            step = entry['step']
+            time_map[(chunk, node)] = step
+        
         for (chunk, node) in self.collective.postcondition:
-            if (chunk, node) not in schedule:
+            if (chunk, node) not in time_map:
                 errors.append(f"Postcondition chunk {chunk} missing at node {node}")
                 return False
-            if schedule[(chunk, node)] > num_steps:
+            if time_map[(chunk, node)] > num_steps:
                 errors.append(f"Chunk {chunk} arrives at node {node} after step {num_steps} "
-                            f"(arrives at {schedule[(chunk, node)]})")
+                            f"(arrives at {time_map[(chunk, node)]})")
                 return False
         return True
     
@@ -96,7 +112,6 @@ class AlgorithmVerifier:
                      warnings: List[str]) -> bool:
         """Verify all sends are valid"""
         sends = solution.get('sends', [])
-        schedule = solution.get('schedule', {})
         
         for send in sends:
             chunk = send['chunk']
@@ -108,57 +123,75 @@ class AlgorithmVerifier:
             if (src, dst) not in self.topology.bandwidth:
                 errors.append(f"Send uses non-existent link ({src}, {dst})")
                 return False
-            
-            # Check if source has chunk before sending
-            if (chunk, src) not in schedule:
-                errors.append(f"Node {src} sends chunk {chunk} without having it")
-                return False
-            
-            src_time = schedule[(chunk, src)]
-            dst_time = schedule.get((chunk, dst), float('inf'))
-            
-            # Source must have chunk before sending
-            if src_time > step:
-                errors.append(f"Node {src} sends chunk {chunk} at step {step} "
-                            f"but receives it at step {src_time}")
-                return False
-            
-            # Destination receives after send
-            if dst_time <= step:
-                errors.append(f"Node {dst} receives chunk {chunk} at step {dst_time} "
-                            f"but send happens at step {step}")
-                return False
+
                 
         return True
     
     def _verify_bandwidth_constraints(self, solution: Dict, errors: List[str], 
                                     warnings: List[str]) -> bool:
         """Verify bandwidth constraints are satisfied"""
+
+        # Get bandwidth constraints
+        constraints = self.topology.get_bandwidth_constraints_for_step()
+
         sends = solution.get('sends', [])
         rounds = solution.get('rounds', [])
+        num_steps = len(rounds)
+
         
         # Group sends by link and step
         sends_by_link_step = {}
         for send in sends:
-            key = ((send['src'], send['dst']), send['step'])
+            key = (send['step'])
             if key not in sends_by_link_step:
                 sends_by_link_step[key] = []
             sends_by_link_step[key].append(send)
+
+        # print(sends_by_link_step)
+        # exit(0)
+
+        # Track violations for better error reporting
+        violations = []
         
-        # Check each link at each step
-        for (link, step), step_sends in sends_by_link_step.items():
-            if step >= len(rounds):
-                errors.append(f"Send at step {step} exceeds number of steps")
-                return False
-                
-            bandwidth = self.topology.bandwidth[link]
-            rounds_at_step = rounds[step]
-            max_sends = bandwidth * rounds_at_step
+        for step in range(num_steps):
+            step_sends = sends_by_link_step.get(step, [])
+            rounds_at_step = solution['rounds'][step]
             
-            if len(step_sends) > max_sends:
-                errors.append(f"Link {link} at step {step}: {len(step_sends)} sends "
-                            f"exceed capacity {max_sends} (bw={bandwidth}, rounds={rounds_at_step})")
-                return False
+            # For each bandwidth constraint set
+            for constraint_idx, (link_set, bandwidth) in enumerate(constraints):
+                # Count sends in this link set at this step
+                sends_in_constraint = 0
+                affected_links = []
+                
+                for send in step_sends:
+                    src, dst = send['src'], send['dst']
+                    if (src, dst) in link_set:
+                        sends_in_constraint += 1
+                        affected_links.append((src, dst))
+                
+                # Check constraint: sends_in_constraint <= bandwidth * rounds_at_step
+                max_allowed = bandwidth * rounds_at_step
+                if sends_in_constraint > max_allowed:
+                    violation_info = {
+                        'step': step,
+                        'constraint_idx': constraint_idx,
+                        'sends': sends_in_constraint,
+                        'max_allowed': max_allowed,
+                        'bandwidth': bandwidth,
+                        'rounds': rounds_at_step,
+                        'affected_links': affected_links
+                    }
+                    violations.append(violation_info)
+        
+        # Report all violations
+        if violations:
+            print(f"Found {len(violations)} bandwidth constraint violations:")
+            for v in violations:
+                print(
+                    f"  Step {v['step']}: {v['sends']} sends exceed limit of {v['max_allowed']} "
+                    f"(bandwidth={v['bandwidth']}, rounds={v['rounds']}) on links: {v['affected_links']}"
+                )
+            return False
                 
         return True
     

@@ -5,6 +5,7 @@ sys.path.append('.')
 from ..topology import *
 from ..collective import CollectiveType
 from ..sccl.pareto_synthesis import ParetoSynthesizer
+from ..util.algorithm_verifier import *
 from ..util.visualization import visualize_pareto_frontier
 
 def test_dgx1_allgather():
@@ -15,6 +16,7 @@ def test_dgx1_allgather():
     
     # Create DGX-1 topology
     topology = create_dgx1_topology()
+    coll_type = CollectiveType.ALLGATHER
     
     # Print topology information
     print(f"\nTopology Information:")
@@ -31,30 +33,35 @@ def test_dgx1_allgather():
     synthesizer = ParetoSynthesizer(k=0, max_steps_offset=6)
     
     # Synthesize algorithms
-    algorithms = synthesizer.synthesize(CollectiveType.ALLGATHER, topology)
+    algorithms = synthesizer.synthesize(coll_type, topology)
     
     # Print results
-    print(f"\n{'='*60}")
-    print("SYNTHESIS RESULTS")
-    print(f"{'='*60}")
-    print(f"Found {len(algorithms)} algorithms\n")
+    # print(f"\n{'='*60}")
+    # print("SYNTHESIS RESULTS")
+    # print(f"{'='*60}")
+    # print(f"Found {len(algorithms)} algorithms\n")
     
-    for i, alg in enumerate(algorithms):
-        print(f"Algorithm {i+1}:")
-        print(f"  Steps (S): {alg['steps']}")
-        print(f"  Rounds (R): {alg['rounds']}")
-        print(f"  Chunks per node (C): {alg['chunks_per_node']}")
-        print(f"  Latency cost: {alg['latency_cost']}")
-        print(f"  Bandwidth cost (R/C): {alg['bandwidth_cost']:.3f}")
-        print(f"  Cost formula: {alg['latency_cost']}·α + {alg['bandwidth_cost']:.3f}·L·β")
+    # for i, alg in enumerate(algorithms):
+    #     print(f"Algorithm {i+1}:")
+    #     print(f"  Steps (S): {alg['steps']}")
+    #     print(f"  Rounds (R): {alg['rounds']}")
+    #     print(f"  Chunks per node (C): {alg['chunks_per_node']}")
+    #     print(f"  Latency cost: {alg['latency_cost']}")
+    #     print(f"  Bandwidth cost (R/C): {alg['bandwidth_cost']:.3f}")
+    #     print(f"  Cost formula: {alg['latency_cost']}·α + {alg['bandwidth_cost']:.3f}·L·β")
         
-        # Check if this matches paper results
-        if alg['steps'] == 2 and alg['rounds'] == 3:
-            print("  *** This is the latency-optimal algorithm from the paper! ***")
-        elif alg['steps'] == 3 and alg['rounds'] == 7 and alg['chunks_per_node'] == 6:
-            print("  *** This is the bandwidth-optimal algorithm from the paper! ***")
-        print()
-    
+    #     # Check if this matches paper results
+    #     if alg['steps'] == 2 and alg['rounds'] == 3:
+    #         print("  *** This is the latency-optimal algorithm from the paper! ***")
+    #     elif alg['steps'] == 3 and alg['rounds'] == 7 and alg['chunks_per_node'] == 6:
+    #         print("  *** This is the bandwidth-optimal algorithm from the paper! ***")
+    #     print()
+
+    verification_results = verify_synthesized_algorithms(
+        algorithms, topology, coll_type
+    )
+    print_verification_summary(algorithms, verification_results)
+
     # Visualize Pareto frontier
     if algorithms:
         visualize_pareto_frontier(

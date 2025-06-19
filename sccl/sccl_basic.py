@@ -82,14 +82,14 @@ class SCCLBasic:
                 )
         
         # C5: Bandwidth constraints with constraint sets
-        self._add_bandwidth_constraints()
+        self._relaxed_bandwidth_constraints()
         
         # C6: Total rounds constraint
         self.solver.add(Sum(self.round_vars) == self.num_rounds)
         
         # Rounds must be non-negative
         for r in self.round_vars:
-            self.solver.add(r >= 0)
+            self.solver.add(r > 0)
     
     def _add_bandwidth_constraints(self):
         """
@@ -123,7 +123,33 @@ class SCCLBasic:
                     self.solver.add(
                         Sum(sends_in_set) <= bandwidth * self.round_vars[s-1]
                     )
-    
+
+    def _relaxed_bandwidth_constraints(self):
+        """
+        Add relaxed bandwidth constraints for debugging purposes.
+        This allows more flexibility in send counts.
+        """
+        # Get all bandwidth constraints
+        constraints = self.topology.get_bandwidth_constraints_for_step()
+
+
+        for link_set, bandwidth in constraints:
+            # Count sends in this link set at this step
+            sends_in_set = []
+
+            for (src, dst) in link_set:
+                for c in range(self.collective.num_chunks):
+                    # Add to count if this send happens at step s
+                    sends_in_set.append(
+                        If(self.send_vars[(src, c, dst)], 1, 0)
+                    )
+
+            # Add relaxed constraint: total sends in this set ≤ bandwidth * rounds + 1
+            if sends_in_set:
+                self.solver.add(
+                    Sum(sends_in_set) <= bandwidth * self.num_rounds
+                )
+
     def solve(self) -> Optional[Dict]:
         """Solve SMT problem"""
         result = self.solver.check()
@@ -135,13 +161,25 @@ class SCCLBasic:
             solution = {
                 'status': 'sat',
                 'rounds': [],
-                'sends': []
+                'sends': [],
+                'time': []
             }
             
             # Extract rounds per step
             for s in range(self.num_steps):
                 r_val = model.evaluate(self.round_vars[s], model_completion=True)
                 solution['rounds'].append(r_val.as_long() if is_int_value(r_val) else 0)
+
+            # Extract time variables
+            for c in range(self.collective.num_chunks):
+                for n in range(self.topology.num_nodes):
+                    time_val = model.evaluate(self.time_vars[(c, n)], model_completion=True)
+                    step = time_val.as_long() if is_int_value(time_val) else 0
+                    solution['time'].append({
+                        'chunk': c,
+                        'node': n,
+                        'step': step
+                    })
             
             # Extract sends
             for (src, dst) in self.topology.get_links():

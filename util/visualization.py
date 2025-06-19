@@ -138,9 +138,9 @@ def visualize_pareto_frontier(algorithms: List[Dict],
     saved_path = None
     if save_path is None:
         # Auto-generate filename with timestamp
-        os.makedirs('sccl/plots', exist_ok=True)
+        os.makedirs('paretocc/plots', exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_path = f'sccl/plots/pareto_frontier_{timestamp}.png'
+        save_path = f'paretocc/plots/pareto_frontier_{timestamp}.png'
     
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     saved_path = save_path

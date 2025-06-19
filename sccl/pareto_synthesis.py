@@ -33,7 +33,7 @@ class ParetoSynthesizer:
                   topology: Topology) -> List[Dict]:
         """
         Main Pareto synthesis algorithm 
-        """
+        """        
         # Compute lower bounds
         a_l = topology.compute_diameter()
         b_l = topology.compute_inv_bisection_bandwidth()
@@ -81,6 +81,7 @@ class ParetoSynthesizer:
                 collective = Collective.create_collective(
                     collective_type, topology.num_nodes, C
                 )
+                verifier = AlgorithmVerifier(topology, collective)
                 G = collective.num_chunks
 
                 # Line 9: Try to synthesize
@@ -100,8 +101,17 @@ class ParetoSynthesizer:
                         'latency_cost': S,
                         'bandwidth_cost': bandwidth_cost,
                         'solution': solution
-                    }
+                    }   
                     
+                    result = verifier.verify_algorithm(solution)
+                    if result.errors:
+                        print("Errors:")
+                        for error in result.errors[:3]:  # Show first 3 errors
+                            print(f"  • {error}")
+                        if len(result.errors) > 3:
+                            print(f"  ... and {len(result.errors) - 3} more errors")
+                        continue  # Skip this candidate if verification fails
+
                     synthesized_algorithms.append(algorithm)
                     found_solution_this_step = True
                     print(f" SUCCESS!")
@@ -132,22 +142,18 @@ class ParetoSynthesizer:
               f"({stats['total_filtered']/stats['total_candidates']*100:.1f}%)")
         print(f"  SMT solver calls: {stats['total_smt_calls']}")
         print(f"  Filtering efficiency: {stats['total_filtered']/stats['total_candidates']*100:.1f}% "
-              f"reduction in SMT calls")
+              f"reduction in SMT calls") 
     
 # Example usage
 if __name__ == "__main__":
     # Ring topology
     num_nodes=4
-    ring_topology = Topology(
-        num_nodes=num_nodes,
-        bandwidth={(i, (i+1)%num_nodes): 1 for i in range(num_nodes)} | 
-                  {((i+1)%num_nodes, i): 1 for i in range(num_nodes)}
-    )
+    ring_topology = create_ring_topology(num_nodes)
     
-    synthesizer = ParetoSynthesizer(k=10)
+    synthesizer = ParetoSynthesizer(k=5, max_steps_offset=7)
     
     # Test with different collectives to see filtering effects
-    for coll_type in [CollectiveType.ALLGATHER, CollectiveType.ALLTOALL]:
+    for coll_type in [CollectiveType.ALLGATHER]:
         print(f"\n{'='*60}")
         print(f"Testing {coll_type.value.upper()}")
         print(f"{'='*60}")
